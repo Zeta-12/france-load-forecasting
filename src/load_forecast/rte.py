@@ -10,6 +10,7 @@ Licence Ouverte v2.0 (Etalab), source: RTE.
 from __future__ import annotations
 
 import logging
+import time
 from pathlib import Path
 
 import pandas as pd
@@ -23,11 +24,19 @@ FIELDS = "date_heure,consommation,prevision_j1,prevision_j"
 COLUMNS = {"consommation": "load", "prevision_j1": "rte_j1", "prevision_j": "rte_j"}
 
 
-def download(kind: str, dest: Path, timeout: int = 600) -> Path:
+def download(kind: str, dest: Path, timeout: int = 600, retries: int = 3) -> Path:
     url = f"{ODRE}/{DATASETS[kind]}/exports/parquet"
-    log.info("downloading %s", url)
-    r = requests.get(url, params={"select": FIELDS}, timeout=timeout)
-    r.raise_for_status()
+    for attempt in range(retries):
+        log.info("downloading %s", url)
+        try:
+            r = requests.get(url, params={"select": FIELDS}, timeout=(20, timeout))
+            r.raise_for_status()
+            break
+        except (requests.ConnectionError, requests.Timeout, requests.HTTPError) as e:
+            if attempt == retries - 1:
+                raise
+            log.warning("%s, retrying in %d s", type(e).__name__, 30 * (attempt + 1))
+            time.sleep(30 * (attempt + 1))
     dest.parent.mkdir(parents=True, exist_ok=True)
     tmp = dest.with_suffix(".tmp")
     tmp.write_bytes(r.content)

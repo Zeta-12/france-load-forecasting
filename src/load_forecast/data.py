@@ -14,6 +14,8 @@ log = logging.getLogger(__name__)
 
 # archived day-1 / day-2 forecasts, see weather.fetch_previous_runs
 FORECAST_SOURCES = {"day1": 1, "day2": 2}
+# weather is downloaded and saved one year at a time, so that an interrupted download resumes where it stopped
+CHUNK_DAYS = 365
 
 
 def _age_days(path: Path) -> float:
@@ -25,6 +27,22 @@ def _start(store: Path, default: pd.Timestamp) -> pd.Timestamp:
         return default
     last = pd.read_parquet(store, columns=["time"])["time"].max()
     return max(default, pd.Timestamp(last).tz_localize(None).normalize() - pd.Timedelta(days=3))
+
+
+def chunks(start: pd.Timestamp, end: pd.Timestamp, days: int = CHUNK_DAYS) -> list[tuple[pd.Timestamp, pd.Timestamp]]:
+    out = []
+    while start <= end:
+        stop = min(start + pd.Timedelta(days=days - 1), end)
+        out.append((start, stop))
+        start = stop + pd.Timedelta(days=1)
+    return out
+
+
+def _fetch_store(store: Path, start: pd.Timestamp, end: pd.Timestamp, fetch_chunk) -> None:
+    for a, b in chunks(start, end):
+        log.info("%s: %s to %s", store.stem, f"{a:%Y-%m-%d}", f"{b:%Y-%m-%d}")
+        df = fetch_chunk(f"{a:%Y-%m-%d}", f"{b:%Y-%m-%d}", weather.pause_for((b - a).days + 1))
+        weather.merge_store(store, df)
 
 
 def fetch(cfg: dict, sources: list[str] | None = None, today: pd.Timestamp | None = None) -> None:
@@ -46,20 +64,18 @@ def fetch(cfg: dict, sources: list[str] | None = None, today: pd.Timestamp | Non
     if "era5" in sources:
         store = wdir / "era5.parquet"
         start = _start(store, pd.Timestamp(cfg["history_start"]) - pd.Timedelta(days=31))
-        # long requests weigh a lot on the open-meteo quota (600 per minute)
-        pause = 40 if (today - start).days > 365 else 0
-        df = weather.fetch_archive(f"{start:%Y-%m-%d}", f"{today:%Y-%m-%d}", variables, wcfg["reanalysis_model"], pause)
-        weather.merge_store(store, df)
+        model = wcfg["reanalysis_model"]
+        _fetch_store(store, start, today, lambda a, b, pause: weather.fetch_archive(a, b, variables, model, pause))
     for name, days in FORECAST_SOURCES.items():
         if name not in sources:
             continue
         store = wdir / f"{name}.parquet"
         start = _start(store, pd.Timestamp(wcfg["forecast_start"]) - pd.Timedelta(days=10))
-        pause = 10 if (today - start).days > 180 else 0
-        df = weather.fetch_previous_runs(
-            f"{start:%Y-%m-%d}", f"{today:%Y-%m-%d}", variables, wcfg["forecast_model"], days, pause
-        )
-        weather.merge_store(store, df)
+
+        def fetch_chunk(a, b, pause, days=days):
+            return weather.fetch_previous_runs(a, b, variables, wcfg["forecast_model"], days, pause)
+
+        _fetch_store(store, start, today, fetch_chunk)
 
 
 def load(cfg: dict, forecast_source: str | None = None) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame | None]:

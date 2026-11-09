@@ -40,13 +40,25 @@ SHORT = {"temperature_2m": "temp", "cloud_cover": "cloud", "shortwave_radiation"
 DEBIAS = ["temp", "solar", "wind"]
 
 
+_session = requests.Session()
+
+
+def pause_for(days: int) -> float:
+    """Seconds to wait between two requests of `days` days.
+
+    Open-Meteo counts one call per location, 14 days and 10 variables, with a limit of 600 calls per minute.
+    """
+    return max(1.0, days / 14) / 9
+
+
 def _get(url: str, params: dict, retries: int = 6) -> dict:
     for attempt in range(retries):
         try:
-            r = requests.get(url, params=params, timeout=180)
-        except requests.ConnectionError as e:
-            log.warning("connection error (%s), retrying", e)
-            time.sleep(10 * (attempt + 1))
+            r = _session.get(url, params=params, timeout=(20, 120))
+        except (requests.ConnectionError, requests.Timeout) as e:
+            wait = 15 * (attempt + 1)
+            log.warning("%s on %s, retrying in %d s", type(e).__name__, url, wait)
+            time.sleep(wait)
             continue
         if r.status_code == 429 or r.status_code >= 500:
             wait = 65 * (attempt + 1) if r.status_code == 429 else 15
@@ -108,7 +120,7 @@ def fetch_forecast(variables: list[str], model: str, past_days: int = 7, forecas
         p = _params(lat, lon, variables, model, past_days=past_days, forecast_days=forecast_days)
         return _frame(_get(FORECAST_URL, p), variables)
 
-    return _per_region(one, pause=0)
+    return _per_region(one, pause=pause_for(past_days + forecast_days))
 
 
 def merge_store(path: Path, new: pd.DataFrame) -> pd.DataFrame:

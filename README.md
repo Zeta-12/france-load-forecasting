@@ -239,3 +239,8 @@ src/load_forecast/
 - Code: Apache-2.0.
 
 This project is not affiliated with RTE.
+
+## Author
+
+**Julien Beloin**, Machine Learning & Computer Vision Engineer
+([LinkedIn](https://www.linkedin.com/in/j-beloin), [GitHub](https://github.com/Zeta-12))
