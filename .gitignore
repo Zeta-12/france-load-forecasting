@@ -1,0 +1,18 @@
+# Environments
+.venv/
+__pycache__/
+*.py[cod]
+
+# Data and outputs (data is downloaded by `flf fetch`)
+data/
+runs/
+site/
+archive/
+
+# Tooling
+.pytest_cache/
+.ruff_cache/
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

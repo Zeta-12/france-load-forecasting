@@ -1,0 +1,78 @@
+name: Daily forecast
+
+on:
+  schedule:
+    # 09:30 in winter, 10:30 in summer (Paris). The code itself cuts the load data at 09:00 local.
+    - cron: "30 8 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: daily-forecast
+  cancel-in-progress: false
+
+jobs:
+  forecast:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - name: Install
+        run: uv sync --locked --python 3.12
+
+      # raw data (~30 MB), a cold cache means a full download (~10 min, mostly ERA5)
+      - name: Restore data
+        uses: actions/cache/restore@v4
+        with:
+          path: data
+          key: data-${{ github.run_id }}
+          restore-keys: data-
+
+      - name: Check out the forecast archive (branch "forecasts")
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git ls-remote --exit-code --heads origin forecasts; then
+            git fetch --depth 1 origin forecasts:forecasts
+          else
+            empty=$(git hash-object -t tree /dev/null)
+            git branch forecasts "$(git commit-tree "$empty" -m 'Forecast archive')"
+          fi
+          git worktree add archive forecasts
+
+      - name: Forecast tomorrow
+        run: uv run flf live --archive archive --site site
+
+      - name: Save data
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: data
+          key: data-${{ github.run_id }}
+
+      - name: Push the archive
+        working-directory: archive
+        run: |
+          git add forecasts actuals.csv
+          git commit -m "Forecast $(ls forecasts | sort | tail -1 | cut -d. -f1)" || echo "nothing new"
+          git push origin forecasts
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    needs: forecast
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
